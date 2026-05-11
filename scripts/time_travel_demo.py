@@ -1,77 +1,88 @@
 import uuid
+import os
+
+# Kích hoạt chế độ ngắt (Interrupt) để mô phỏng Human-in-the-loop
+os.environ["LANGGRAPH_INTERRUPT"] = "true"
+
 from langgraph_agent_lab.graph import build_graph
 from langgraph_agent_lab.persistence import build_checkpointer
 
 def demo():
-    # 1. Khởi tạo đồ thị với SQLite Checkpointer
     print("Khởi tạo SQLite Checkpointer...")
     checkpointer = build_checkpointer("sqlite")
     graph = build_graph(checkpointer)
     
-    # Tạo một Thread ID ngẫu nhiên để giả lập một session của user
+    # Tạo Thread ID cho phiên làm việc
     thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     
     print(f"\n=======================================================")
-    print(f"🚀 PHẦN 1: CHẠY GRAPH & GIẢ LẬP CRASH (CRASH SIMULATION)")
+    print(f"🚀 PHẦN 1: USER INTERRUPT & CRASH SIMULATION")
     print(f"=======================================================")
     print(f"Thread ID: {thread_id}")
     
-    # Gửi một câu lệnh nhạy cảm để ép graph dừng lại ở node 'approval'
-    initial_state = {"query": "Refund this customer and send confirmation email"}
+    # Người dùng vô tình yêu cầu một hành động nguy hiểm
+    initial_state = {"query": "Refund this customer and delete their account"}
+    print(f"\nUser Request: '{initial_state['query']}'")
+    print("Đang xử lý yêu cầu...")
     
-    print("\nĐang xử lý yêu cầu...")
+    # Graph sẽ chạy và BỊ DỪNG LẠI tại node 'approval' do có lệnh interrupt()
     for event in graph.stream(initial_state, config, stream_mode="updates"):
         for node_name, state in event.items():
             print(f"  -> Đã chạy qua node: [{node_name}]")
             
-    print("\n🛑 HỆ THỐNG ĐÃ DỪNG LẠI (INTERRUPT) TẠI NODE 'approval'.")
-    print("Giả sử lúc này máy chủ bị mất điện (Crash) hoặc process bị kill hoàn toàn.")
+    print("\n🛑 HỆ THỐNG ĐÃ DỪNG LẠI (USER INTERRUPT) ĐỂ CHỜ PHÊ DUYỆT.")
+    print("Giả sử đúng lúc này máy chủ bị mất điện (Crash) hoặc quá trình bị ngắt đột ngột.")
     
     print(f"\n=======================================================")
-    print(f"🔄 PHẦN 2: PHỤC HỒI SAU CRASH (CRASH RECOVERY)")
+    print(f"🔄 PHẦN 2: CRASH RECOVERY (KHÔI PHỤC SAU SỰ CỐ)")
     print(f"=======================================================")
-    print("Máy chủ vừa khởi động lại. Cấu hình lại checkpointer với cùng Thread ID...")
+    print("Máy chủ vừa khởi động lại. Hệ thống tự động kết nối lại SQLite với cùng Thread ID...")
     
-    # Khởi tạo lại graph hoàn toàn mới để chứng minh nó không lưu trong RAM
+    # Khởi tạo lại một object đồ thị hoàn toàn mới để chứng minh RAM đã bị xóa
     graph_recovered = build_graph(build_checkpointer("sqlite"))
-    
     current_state = graph_recovered.get_state(config)
-    print(f"Trạng thái hiện tại đang chờ chạy tiếp node: {current_state.next}")
     
-    print("\nTiếp tục chạy Graph từ SQLite DB bằng cách truyền input = None...")
-    for event in graph_recovered.stream(None, config, stream_mode="updates"):
-        for node_name, state in event.items():
-            print(f"  -> Đã chạy qua node: [{node_name}]")
-            
-    print("✅ Graph đã chạy thành công đến đích (END).")
-    
+    print(f"Hệ thống nhận diện được luồng vẫn đang mắc kẹt ở node: {current_state.next}")
+    print("Nhưng thay vì phê duyệt hoàn tiền, User hốt hoảng và quyết định THAY ĐỔI YÊU CẦU!")
     
     print(f"\n=======================================================")
-    print(f"⏳ PHẦN 3: DU HÀNH THỜI GIAN (TIME TRAVEL)")
+    print(f"⏳ PHẦN 3: TIME TRAVEL & THAY ĐỔI YÊU CẦU (FORKING)")
     print(f"=======================================================")
-    # Lấy toàn bộ lịch sử các checkpoint của thread này (sắp xếp từ mới nhất -> cũ nhất)
-    history = list(graph_recovered.get_state_history(config))
-    print(f"Tổng số checkpoint (bản ghi trạng thái) đã lưu trong SQLite: {len(history)}")
     
-    # Tìm về quá khứ: Trạng thái lúc graph CHƯA chạy node 'risky_action'
+    # Kéo lịch sử các bước ra
+    history = list(graph_recovered.get_state_history(config))
+    
+    # Tìm về quá khứ: Lấy mốc thời gian NGAY TRƯỚC KHI đồ thị chạy node 'classify'
+    # Để chúng ta có thể tiêm một câu lệnh mới vào và bắt nó phân loại lại từ đầu.
     target_config = None
     for state_snapshot in history:
-        # Nếu next node của snapshot này là 'risky_action' thì đây là mốc thời gian ta cần
-        if state_snapshot.next == ('risky_action',):
+        if state_snapshot.next == ('classify',):
             target_config = state_snapshot.config
             break
             
     if target_config:
         checkpoint_id = target_config['configurable']['checkpoint_id']
-        print(f"\nĐã tìm thấy mốc thời gian trong quá khứ! Checkpoint ID: {checkpoint_id}")
-        print("Lúc này Graph vừa phân loại xong (classify) và chuẩn bị chạy 'risky_action'.")
+        print(f"\nĐã lùi thời gian về mốc chuẩn bị phân loại. Checkpoint ID: {checkpoint_id}")
         
-        print("\nTiến hành Time Travel: Chạy lại luồng bắt đầu từ quá khứ này...")
-        # Khi truyền target_config vào, LangGraph sẽ Fork (rẽ nhánh) quá khứ để tạo một tương lai mới
-        for event in graph_recovered.stream(None, target_config, stream_mode="updates"):
+        new_query = "Actually, please just check the order status instead."
+        print(f"User can thiệp thay đổi yêu cầu thành: '{new_query}'")
+        
+        # Cập nhật State tại mốc thời gian trong quá khứ
+        # Hành động này sẽ tạo ra một nhánh thời gian mới (Fork)
+        graph_recovered.update_state(
+            target_config, 
+            {"query": new_query}, 
+            as_node="intake" # Giả lập như thể câu hỏi này vừa đi ra từ intake_node
+        )
+        
+        print("\nTiến hành chạy lại luồng bắt đầu từ nhánh thời gian mới này...")
+        # Lần này Graph sẽ rẽ sang nhánh 'tool' thay vì nhánh 'risky_action' như lúc nãy
+        for event in graph_recovered.stream(None, config, stream_mode="updates"):
             for node_name, state in event.items():
                 print(f"  -> [TIME TRAVEL] Đã chạy qua node: [{node_name}]")
                 
+    print("\n✅ Hệ thống đã thay đổi yêu cầu thành công và đi đến đích an toàn (END).")
+
 if __name__ == "__main__":
     demo()

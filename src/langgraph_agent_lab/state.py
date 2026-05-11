@@ -6,9 +6,9 @@ Students should extend the schema only when needed. Keep state lean and serializ
 from __future__ import annotations
 
 from enum import StrEnum
+from operator import add
 from typing import Annotated, Any, TypedDict
 
-from operator import add
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -41,8 +41,14 @@ class ApprovalDecision(BaseModel):
 class AgentState(TypedDict, total=False):
     """LangGraph state.
 
-    TODO(student): decide which fields should be append-only and which should be overwritten.
+
     The current annotations give a safe starting point for auditability.
+
+    Decision on state reducers:
+    - Append-only (Annotated[list, add]): messages, tool_results, errors, events.
+      These fields maintain a full history for audit trail and cross-node reasoning.
+    - Overwrite (default): route, attempt, evaluation_result, approval, etc.
+      These represent the current active state and are updated as the graph progresses.
     """
 
     thread_id: str
@@ -57,6 +63,7 @@ class AgentState(TypedDict, total=False):
     proposed_action: str | None
     approval: dict[str, Any] | None
     evaluation_result: str | None
+    metadata: dict[str, Any] | None
     messages: Annotated[list[str], add]
     tool_results: Annotated[list[str], add]
     errors: Annotated[list[str], add]
@@ -102,6 +109,7 @@ def initial_state(scenario: Scenario) -> AgentState:
     }
 
 
-def make_event(node: str, event_type: str, message: str, **metadata: Any) -> dict[str, Any]:
+def make_event(node: str, event_type: str, message: str, **metadata: Any) -> dict[str, Any]:  # noqa: ANN401
     """Create a normalized event payload."""
-    return LabEvent(node=node, event_type=event_type, message=message, metadata=metadata).model_dump()
+    event = LabEvent(node=node, event_type=event_type, message=message, metadata=metadata)
+    return event.model_dump()

@@ -6,42 +6,65 @@ input state in place.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .state import AgentState, ApprovalDecision, Route, make_event
 
 
-def intake_node(state: AgentState) -> dict:
-    """Normalize raw query into state fields.
+def intake_node(state: AgentState) -> dict[str, Any]:
+    """Normalize raw query (strip/lower), check for PII, and extract metadata."""
+    import re
+    query = state.get("query", "").strip().lower()
 
-    TODO(student): add normalization, PII checks, and metadata extraction.
-    """
-    query = state.get("query", "").strip()
+    # Basic PII masking (email and phone)
+    masked = re.sub(r"\b[\w\.-]+@[\w\.-]+\.\w{2,4}\b", "[EMAIL]", query)
+    masked = re.sub(r"\b\d{3}[-.]?\d{3}[-.]?\d{4}\b", "[PHONE]", masked)
+
+    metadata = {
+        "word_count": len(query.split()),
+        "has_pii": masked != query,
+        "char_count": len(masked),
+    }
+
     return {
-        "query": query,
-        "messages": [f"intake:{query[:40]}"],
-        "events": [make_event("intake", "completed", "query normalized")],
+        "query": masked,
+        "metadata": metadata,
+        "messages": [f"intake:{masked[:40]}"],
+        "events": [make_event("intake", "completed", "query normalized", **metadata)],
     }
 
 
-def classify_node(state: AgentState) -> dict:
-    """Classify the query into a route.
+def classify_node(state: AgentState) -> dict[str, Any]:
+    """Classify the query into a route based on keywords and priority.
 
-    TODO(student): replace keyword heuristics with a clear routing policy.
     Required routes: simple, tool, missing_info, risky, error.
     """
     query = state.get("query", "").lower()
     words = query.split()
     clean_words = [w.strip("?!.,;:") for w in words]
+
+    risky_keywords = {"refund", "delete", "send", "cancel", "remove", "revoke"}
+    tool_keywords = {"status", "order", "lookup", "check", "track", "find", "search"}
+    error_keywords = {"timeout", "fail", "error", "crash", "unavailable"}
+    vague_pronouns = {"it", "this", "that", "they"}
+
     route = Route.SIMPLE
     risk_level = "low"
-    if "refund" in query or "delete" in query or "send" in query:
+
+    # Priority 1: risky
+    if any(kw in query for kw in risky_keywords):
         route = Route.RISKY
         risk_level = "high"
-    elif "status" in query or "order" in query or "lookup" in query:
-        route = Route.TOOL
-    elif len(clean_words) < 5 and "it" in clean_words:
-        route = Route.MISSING_INFO
-    elif "timeout" in query or "fail" in query:
+    # Priority 2: error (Đẩy lên trước tool để bắt các case "check timeout error")
+    elif any(kw in query for kw in error_keywords):
         route = Route.ERROR
+    # Priority 3: tool
+    elif any(kw in query for kw in tool_keywords):
+        route = Route.TOOL
+    # Priority 4: missing_info (Bỏ giới hạn < 5 từ để bắt các câu dài nhưng thiếu context)
+    elif any(w in vague_pronouns for w in clean_words):
+        route = Route.MISSING_INFO
+
     return {
         "route": route.value,
         "risk_level": risk_level,
@@ -49,54 +72,78 @@ def classify_node(state: AgentState) -> dict:
     }
 
 
-def ask_clarification_node(state: AgentState) -> dict:
-    """Ask for missing information instead of hallucinating.
+def ask_clarification_node(state: AgentState) -> dict[str, Any]:
+    """Generate a specific clarification question based on query context.
 
-    TODO(student): generate a specific clarification question from state.
+
     """
-    question = "Can you provide the order id or the missing context?"
+    query = state.get("query", "").lower()
+    if "it" in query or "this" in query:
+        question = "I'm sorry, but 'it' is unclear. What specifically are you referring to?"
+    else:
+        question = "Could you please provide more context or an order ID to help me assist you?"
+
     return {
         "pending_question": question,
         "final_answer": question,
-        "events": [make_event("clarify", "completed", "missing information requested")],
+        "events": [make_event("clarify", "completed", f"asked: {question[:30]}...")],
     }
 
 
-def tool_node(state: AgentState) -> dict:
-    """Call a mock tool.
+def tool_node(state: AgentState) -> dict[str, Any]:
+    """Execute a mock tool with idempotency check and structured output.
 
-    Simulates transient failures for error-route scenarios to demonstrate retry loops.
-    TODO(student): implement idempotent tool execution and structured tool results.
+
     """
+    import json
     attempt = int(state.get("attempt", 0))
+    scenario_id = state.get("scenario_id", "unknown")
+    tool_results = state.get("tool_results", [])
+
+    # Idempotency check: If already succeeded in this thread, skip re-execution
+    for res in tool_results:
+        try:
+            if json.loads(res).get("status") == "success":
+                return {
+                    "events": [make_event("tool", "skipped", "idempotency check: already success")]
+                }
+        except json.JSONDecodeError:
+            continue
+
     if state.get("route") == Route.ERROR.value and attempt < 2:
-        result = f"ERROR: transient failure attempt={attempt} scenario={state.get('scenario_id', 'unknown')}"
+        result = {"status": "error", "code": 503, "message": "Service temporarily unavailable"}
     else:
-        result = f"mock-tool-result for scenario={state.get('scenario_id', 'unknown')}"
+        result = {"status": "success", "data": f"Processed action for {scenario_id}"}
+
+    result_str = json.dumps(result)
     return {
-        "tool_results": [result],
-        "events": [make_event("tool", "completed", f"tool executed attempt={attempt}")],
+        "tool_results": [result_str],
+        "events": [make_event("tool", "completed", f"status={result['status']}")],
     }
 
 
-def risky_action_node(state: AgentState) -> dict:
-    """Prepare a risky action for approval.
+def risky_action_node(state: AgentState) -> dict[str, Any]:
+    """Prepare a risky action with a clear justification for the reviewer.
 
-    TODO(student): create a proposed action with evidence and risk justification.
+
     """
+    query = state.get("query", "")
+    justification = "Requires manual override due to potential permanent impact on customer data."
+    proposed = f"Action: {query} | Reason: {justification}"
+
     return {
-        "proposed_action": "prepare refund or external action; approval required",
-        "events": [make_event("risky_action", "pending_approval", "approval required")],
+        "proposed_action": proposed,
+        "events": [make_event("risky_action", "prepared", "justification added")],
     }
 
 
-def approval_node(state: AgentState) -> dict:
+def approval_node(state: AgentState) -> dict[str, Any]:
     """Human approval step with optional LangGraph interrupt().
+
+
 
     Set LANGGRAPH_INTERRUPT=true to use real interrupt() for HITL demos.
     Default uses mock decision so tests and CI run offline.
-
-    TODO(student): implement reject/edit decisions and timeout escalation.
     """
     import os
 
@@ -119,62 +166,101 @@ def approval_node(state: AgentState) -> dict:
     }
 
 
-def retry_or_fallback_node(state: AgentState) -> dict:
-    """Record a retry attempt or fallback decision.
+def retry_or_fallback_node(state: AgentState) -> dict[str, Any]:
+    """Record a retry attempt with exponential backoff metadata.
 
-    TODO(student): implement bounded retry, exponential backoff metadata, and fallback route.
+
     """
     attempt = int(state.get("attempt", 0)) + 1
     errors = [f"transient failure attempt={attempt}"]
+
+    # Exponential backoff simulation metadata: 2^attempt * 100ms
+    backoff_ms = (2**attempt) * 100
+    metadata = {"backoff_ms": backoff_ms, "strategy": "exponential_backoff"}
+
     return {
         "attempt": attempt,
         "errors": errors,
-        "events": [make_event("retry", "completed", "retry attempt recorded", attempt=attempt)],
+        "events": [
+            make_event("retry", "completed", f"retry {attempt} recorded", **metadata)
+        ],
     }
 
 
 def answer_node(state: AgentState) -> dict:
-    """Produce a final response.
+    """Produce a final response grounded in tool results.
 
-    TODO(student): ground the answer in tool_results and approval where relevant.
+
     """
-    if state.get("tool_results"):
-        answer = f"I found: {state['tool_results'][-1]}"
+    import json
+    tool_results = state.get("tool_results", [])
+
+    if tool_results:
+        try:
+            latest = json.loads(tool_results[-1])
+            if latest.get("status") == "success":
+                answer = f"I have successfully completed your request: {latest.get('data')}"
+            else:
+                answer = f"I encountered an issue: {latest.get('message')}"
+        except (json.JSONDecodeError, KeyError):
+            answer = f"Here is what I found: {tool_results[-1]}"
     else:
-        answer = "This is a safe mock answer. Replace with your agent response."
+        answer = "I've processed your request. Is there anything else I can help with?"
+
     return {
         "final_answer": answer,
-        "events": [make_event("answer", "completed", "answer generated")],
+        "events": [make_event("answer", "completed", "grounded response generated")],
     }
 
 
 def evaluate_node(state: AgentState) -> dict:
-    """Evaluate tool results — the 'done?' check that enables retry loops.
+    """Evaluate tool results to decide success or retry.
 
-    TODO(student): replace heuristic with LLM-as-judge or structured validation.
+
     """
+    import json
     tool_results = state.get("tool_results", [])
-    latest = tool_results[-1] if tool_results else ""
-    if "ERROR" in latest:
-        return {
-            "evaluation_result": "needs_retry",
-            "events": [make_event("evaluate", "completed", "tool result indicates failure, retry needed")],
-        }
+    if not tool_results:
+        return {"evaluation_result": "success", "events": []}
+
+    try:
+        latest = json.loads(tool_results[-1])
+        if latest.get("status") == "error":
+            return {
+                "evaluation_result": "needs_retry",
+                "events": [
+                    make_event("evaluate", "completed", "retry triggered by service error")
+                ],
+            }
+    except json.JSONDecodeError:
+        pass
+
     return {
         "evaluation_result": "success",
-        "events": [make_event("evaluate", "completed", "tool result satisfactory")],
+        "events": [make_event("evaluate", "completed", "result validated")],
     }
 
 
-def dead_letter_node(state: AgentState) -> dict:
-    """Log unresolvable failures for manual review.
+def dead_letter_node(state: AgentState) -> dict[str, Any]:
+    """Log unresolvable failures and simulate support ticket creation.
 
-    Third layer of error strategy: retry -> fallback -> dead letter.
-    TODO(student): persist to dead-letter queue, alert on-call, or create support ticket.
+
     """
+    import uuid
+    ticket_id = f"TICKET-{uuid.uuid4().hex[:8].upper()}"
     return {
-        "final_answer": "Request could not be completed after maximum retry attempts. Logged for manual review.",
-        "events": [make_event("dead_letter", "completed", f"max retries exceeded, attempt={state.get('attempt', 0)}")],
+        "final_answer": (
+            f"Request could not be completed after maximum retry attempts. "
+            f"A support ticket ({ticket_id}) has been created for manual review."
+        ),
+        "events": [
+            make_event(
+                "dead_letter",
+                "completed",
+                f"max retries exceeded, ticket={ticket_id}",
+                ticket_id=ticket_id,
+            )
+        ],
     }
 
 

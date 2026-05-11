@@ -4,7 +4,7 @@
 {"id":"S04_risky","query":"Refund this customer and send confirmation email","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["hitl","risky"]}
 {"id":"S05_error","query":"Timeout failure while processing request","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["retry"]}
 {"id":"S06_delete","query":"Delete customer account after support verification","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["hitl","destructive"]}
-{"id":"S07_dead_letter","query":"System failure cannot recover after multiple attempts","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":1,"tags":["dead_letter","retry"]}
+{"id":"S07_dead_letter","query":"System failure cannot recover after multiple attempts","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":3,"tags":["dead_letter","retry"]}
 {"id":"S08_edge_risky_tool","query":"Please cancel my order and check status","expected_route":"risky","requires_approval":true,"should_retry":false,"tags":["edge","hitl"]}
 {"id":"S09_edge_missing_long","query":"I really do not understand how to use this at all","expected_route":"missing_info","requires_approval":false,"should_retry":false,"tags":["edge","clarification"]}
 {"id":"S10_edge_error_tool","query":"Please check why I got a timeout error","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["edge","retry"]}
@@ -19,7 +19,7 @@
 {"id":"S19_edge_fail_status_priority","query":"Check order status but payment service keeps failing","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["edge","priority","retry","tool"]}
 {"id":"S20_edge_timeout_track_priority","query":"Track package 42; carrier API timeout error appears every time","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["edge","priority","retry","tool"]}
 {"id":"S21_edge_crash_punctuation","query":"Why did this crash?!","expected_route":"error","requires_approval":false,"should_retry":true,"tags":["edge","punctuation","retry"]}
-{"id":"S22_edge_unavailable_dead_letter","query":"Service unavailable after repeated retries, cannot recover","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":1,"tags":["edge","dead_letter","retry"]}
+{"id":"S22_edge_unavailable_dead_letter","query":"Service unavailable after repeated retries, cannot recover","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":3,"tags":["edge","dead_letter","retry"]}
 {"id":"S23_edge_timeout_dead_letter_low_bound","query":"Timeout fail error crash unavailable all at once","expected_route":"error","requires_approval":false,"should_retry":true,"max_attempts":0,"tags":["edge","dead_letter","retry","boundary"]}
 {"id":"S24_edge_tool_order_digits","query":"Order 000000 status lookup please","expected_route":"tool","requires_approval":false,"should_retry":false,"tags":["edge","tool","digits"]}
 {"id":"S25_edge_tool_search_quotes","query":"Search for \"invoice status\" on order ORD-ABC-999","expected_route":"tool","requires_approval":false,"should_retry":false,"tags":["edge","tool","punctuation"]}

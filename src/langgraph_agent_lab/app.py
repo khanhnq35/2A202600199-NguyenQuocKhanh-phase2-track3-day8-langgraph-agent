@@ -262,7 +262,16 @@ def process_query(query: str, resume_only: bool = False) -> None:
         # New run - Reset everything
         st.session_state.visited_nodes = ["START"]
         st.session_state.nodes_in_this_run = []
-        scen = Scenario(id="ui", query=query, expected_route=Route.SIMPLE)
+        
+        # Thử tìm xem query này có khớp với Scenario nào trong file không để lấy đúng cấu hình (đặc biệt là max_attempts)
+        scenarios = load_scenarios("data/sample/scenarios.jsonl")
+        matched_scenario = next((s for s in scenarios if s.query == query), None)
+        
+        if matched_scenario:
+            scen = matched_scenario
+        else:
+            scen = Scenario(id="ui", query=query, expected_route=Route.SIMPLE)
+            
         state = initial_state(scen)
         stream = graph.stream(state, config, stream_mode="updates", interrupt_before=["approval"])
 

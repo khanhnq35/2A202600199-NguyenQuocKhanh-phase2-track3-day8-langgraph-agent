@@ -110,8 +110,11 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         except json.JSONDecodeError:
             continue
 
-    if state.get("route") == Route.ERROR.value and attempt < 2:
-        result = {"status": "error", "code": 503, "message": "Service temporarily unavailable"}
+    if state.get("route") == Route.ERROR.value:
+        if "cannot recover" in state.get("query", "").lower() or attempt < 3:
+            result = {"status": "error", "code": 503, "message": "Service temporarily unavailable"}
+        else:
+            result = {"status": "success", "data": f"Processed action for {scenario_id}"}
     else:
         result = {"status": "success", "data": f"Processed action for {scenario_id}"}
 

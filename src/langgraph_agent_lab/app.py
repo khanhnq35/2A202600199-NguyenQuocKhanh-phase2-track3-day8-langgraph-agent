@@ -98,6 +98,90 @@ def main() -> None:
             st.rerun()
             
         st.divider()
+        st.header("⚡ Crash & Time Travel")
+        
+        # 1. Crash Recovery UI
+        if st.button("💥 Simulate Server Crash", use_container_width=True, help="Xóa sạch RAM, chỉ giữ lại thread_id."):
+            st.session_state.is_crashed = True
+            st.session_state.messages = []
+            st.session_state.visited_nodes = []
+            st.session_state.nodes_in_this_run = []
+            st.session_state.waiting_for_hitl = False
+            st.session_state.history_offset = 0
+            if "hitl_decision" in st.session_state:
+                del st.session_state.hitl_decision
+            st.rerun()
+            
+        if st.session_state.get("is_crashed", False):
+            if st.button("🔄 Recover from SQLite DB", use_container_width=True, type="primary"):
+                try:
+                    from langgraph_agent_lab.persistence import build_checkpointer
+                    from langgraph_agent_lab.graph import build_graph
+                    checkpointer = build_checkpointer("sqlite", "checkpoints_ui.db")
+                    graph = build_graph(checkpointer=checkpointer)
+                    config = {"configurable": {"thread_id": st.session_state.thread_id}}
+                    state = graph.get_state(config)
+                    
+                    st.session_state.is_crashed = False
+                    st.session_state.messages = [{"role": "assistant", "content": "🔄 **Hệ thống đã phục hồi thành công từ SQLite!** Đang tiếp tục chạy..."}]
+                    st.session_state.visited_nodes = ["START"]
+                    st.session_state.nodes_in_this_run = []
+                    
+                    if state and state.values:
+                        if "events" in state.values:
+                            for event in state.values["events"]:
+                                st.session_state.visited_nodes.append(event["node"])
+                        if state.next and state.next[0] == "approval":
+                            st.session_state.waiting_for_hitl = True
+                            st.session_state.visited_nodes.append("approval")
+                            st.session_state.pending_proposal = state.values.get("proposed_action", "")
+                        else:
+                            # Nếu không vướng HITL, tự động chạy tiếp
+                            st.session_state.resume_graph = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Lỗi: {e}")
+
+        # 2. Time Travel UI
+        try:
+            from langgraph_agent_lab.persistence import build_checkpointer
+            from langgraph_agent_lab.graph import build_graph
+            checkpointer = build_checkpointer("sqlite", "checkpoints_ui.db")
+            graph = build_graph(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": st.session_state.thread_id}}
+            history = list(graph.get_state_history(config))
+            
+            if "history_offset" not in st.session_state:
+                st.session_state.history_offset = 0
+                
+            if len(history) > st.session_state.history_offset + 1:
+                if st.button("⏪ Undo (Rewind 1 Step)", use_container_width=True, help="Quay ngược thời gian lại 1 bước."):
+                    st.session_state.history_offset += 1
+                    target_state = history[st.session_state.history_offset]
+                    st.session_state.checkpoint_id = target_state.config["configurable"]["checkpoint_id"]
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": f"⏪ **Đã quay ngược thời gian!** Trạng thái Graph lùi lại 1 bước. Hãy gõ yêu cầu mới hoặc chờ hệ thống."})
+                    st.session_state.visited_nodes = ["START"]
+                    st.session_state.nodes_in_this_run = []
+                    st.session_state.waiting_for_hitl = False
+                    if "hitl_decision" in st.session_state:
+                        del st.session_state.hitl_decision
+                        
+                    if target_state.values:
+                        if "events" in target_state.values:
+                            for event in target_state.values["events"]:
+                                st.session_state.visited_nodes.append(event["node"])
+                        if target_state.next and target_state.next[0] == "approval":
+                            st.session_state.waiting_for_hitl = True
+                            st.session_state.visited_nodes.append("approval")
+                            st.session_state.pending_proposal = target_state.values.get("proposed_action", "")
+                        elif target_state.next:
+                            st.session_state.resume_graph = True
+                    st.rerun()
+        except Exception:
+            pass
+
+        st.divider()
         st.header("📂 Sample Scenarios")
         scenarios = load_scenarios("data/sample/scenarios.jsonl")
         for s in scenarios:
@@ -139,20 +223,30 @@ def main() -> None:
         # Input
         if user_query := st.chat_input("Nhập yêu cầu của bạn..."):
             st.session_state.messages.append({"role": "user", "content": user_query})
+            st.session_state.history_offset = 0
             st.rerun()
 
         # Processing Logic
-        if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
+        if st.session_state.get("resume_graph", False):
+            st.session_state.resume_graph = False
+            process_query("", resume_only=True)
+        elif st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
             process_query(st.session_state.messages[-1]["content"])
 
     with col_graph:
         st.subheader("📊 Live Workflow Diagram")
         render_dynamic_mermaid(st.session_state.visited_nodes)
         
-def process_query(query: str) -> None:
+def process_query(query: str, resume_only: bool = False) -> None:
     checkpointer = build_checkpointer("sqlite", "checkpoints_ui.db")
     graph = build_graph(checkpointer=checkpointer)
     config = {"configurable": {"thread_id": st.session_state.thread_id}}
+    
+    # Kích hoạt Time Travel (Fork)
+    if "checkpoint_id" in st.session_state:
+        config["configurable"]["checkpoint_id"] = st.session_state.checkpoint_id
+        del st.session_state.checkpoint_id
+        
     
     # Check if we are resuming from HITL
     if hasattr(st.session_state, "hitl_decision"):
@@ -162,6 +256,8 @@ def process_query(query: str) -> None:
         graph.update_state(config, {"approval": {"approved": decision}}, as_node="approval")
         # Resume stream
         stream = graph.stream(None, config, stream_mode="updates")
+    elif resume_only:
+        stream = graph.stream(None, config, stream_mode="updates", interrupt_before=["approval"])
     else:
         # New run - Reset everything
         st.session_state.visited_nodes = ["START"]

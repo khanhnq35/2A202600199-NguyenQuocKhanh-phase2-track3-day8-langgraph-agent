@@ -1,48 +1,77 @@
-"""
-Demo script for LangGraph Time Travel (Extension 3).
-Usage: python scripts/time_travel_demo.py
-"""
-import sqlite3
+import uuid
 from langgraph_agent_lab.graph import build_graph
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph_agent_lab.persistence import build_checkpointer
 
-def demo_time_travel():
-    # 1. Setup checkpointer
-    conn = sqlite3.connect("checkpoints.db", check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
+def demo():
+    # 1. Khởi tạo đồ thị với SQLite Checkpointer
+    print("Khởi tạo SQLite Checkpointer...")
+    checkpointer = build_checkpointer("sqlite")
+    graph = build_graph(checkpointer)
     
-    # 2. Build graph
-    graph = build_graph(checkpointer=checkpointer)
-    
-    # 3. Simulate a thread id
-    thread_id = "demo_thread_001"
+    # Tạo một Thread ID ngẫu nhiên để giả lập một session của user
+    thread_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": thread_id}}
     
-    print(f"--- Auditing Thread: {thread_id} ---")
+    print(f"\n=======================================================")
+    print(f"🚀 PHẦN 1: CHẠY GRAPH & GIẢ LẬP CRASH (CRASH SIMULATION)")
+    print(f"=======================================================")
+    print(f"Thread ID: {thread_id}")
     
-    # 4. List state history
-    # This retrieves all previous checkpoints for the thread
-    history = list(graph.get_state_history(config))
+    # Gửi một câu lệnh nhạy cảm để ép graph dừng lại ở node 'approval'
+    initial_state = {"query": "Refund this customer and send confirmation email"}
     
-    if not history:
-        print("No history found. Run scenarios first to populate checkpoints.db")
-        return
-
-    print(f"Found {len(history)} checkpoints.\n")
+    print("\nĐang xử lý yêu cầu...")
+    for event in graph.stream(initial_state, config, stream_mode="updates"):
+        for node_name, state in event.items():
+            print(f"  -> Đã chạy qua node: [{node_name}]")
+            
+    print("\n🛑 HỆ THỐNG ĐÃ DỪNG LẠI (INTERRUPT) TẠI NODE 'approval'.")
+    print("Giả sử lúc này máy chủ bị mất điện (Crash) hoặc process bị kill hoàn toàn.")
     
-    for i, state in enumerate(reversed(history)):
-        node = state.metadata.get("source", "START")
-        print(f"Step {i}: Node = {node}")
-        print(f"   Route: {state.values.get('route')}")
-        print(f"   Events: {len(state.values.get('events', []))}")
-        print("-" * 30)
-
-    # 5. Time Travel: How to resume from a past checkpoint
-    # last_state = history[1] # Pick the second most recent state
-    # graph.invoke(None, last_state.config) 
-
+    print(f"\n=======================================================")
+    print(f"🔄 PHẦN 2: PHỤC HỒI SAU CRASH (CRASH RECOVERY)")
+    print(f"=======================================================")
+    print("Máy chủ vừa khởi động lại. Cấu hình lại checkpointer với cùng Thread ID...")
+    
+    # Khởi tạo lại graph hoàn toàn mới để chứng minh nó không lưu trong RAM
+    graph_recovered = build_graph(build_checkpointer("sqlite"))
+    
+    current_state = graph_recovered.get_state(config)
+    print(f"Trạng thái hiện tại đang chờ chạy tiếp node: {current_state.next}")
+    
+    print("\nTiếp tục chạy Graph từ SQLite DB bằng cách truyền input = None...")
+    for event in graph_recovered.stream(None, config, stream_mode="updates"):
+        for node_name, state in event.items():
+            print(f"  -> Đã chạy qua node: [{node_name}]")
+            
+    print("✅ Graph đã chạy thành công đến đích (END).")
+    
+    
+    print(f"\n=======================================================")
+    print(f"⏳ PHẦN 3: DU HÀNH THỜI GIAN (TIME TRAVEL)")
+    print(f"=======================================================")
+    # Lấy toàn bộ lịch sử các checkpoint của thread này (sắp xếp từ mới nhất -> cũ nhất)
+    history = list(graph_recovered.get_state_history(config))
+    print(f"Tổng số checkpoint (bản ghi trạng thái) đã lưu trong SQLite: {len(history)}")
+    
+    # Tìm về quá khứ: Trạng thái lúc graph CHƯA chạy node 'risky_action'
+    target_config = None
+    for state_snapshot in history:
+        # Nếu next node của snapshot này là 'risky_action' thì đây là mốc thời gian ta cần
+        if state_snapshot.next == ('risky_action',):
+            target_config = state_snapshot.config
+            break
+            
+    if target_config:
+        checkpoint_id = target_config['configurable']['checkpoint_id']
+        print(f"\nĐã tìm thấy mốc thời gian trong quá khứ! Checkpoint ID: {checkpoint_id}")
+        print("Lúc này Graph vừa phân loại xong (classify) và chuẩn bị chạy 'risky_action'.")
+        
+        print("\nTiến hành Time Travel: Chạy lại luồng bắt đầu từ quá khứ này...")
+        # Khi truyền target_config vào, LangGraph sẽ Fork (rẽ nhánh) quá khứ để tạo một tương lai mới
+        for event in graph_recovered.stream(None, target_config, stream_mode="updates"):
+            for node_name, state in event.items():
+                print(f"  -> [TIME TRAVEL] Đã chạy qua node: [{node_name}]")
+                
 if __name__ == "__main__":
-    try:
-        demo_time_travel()
-    except Exception as e:
-        print(f"Note: This demo requires checkpoints.db to be present.\nError: {e}")
+    demo()

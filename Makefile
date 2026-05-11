@@ -13,10 +13,10 @@ typecheck:
 	mypy src
 
 run-scenarios:
-	PYTHONPATH=src python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics.json
+	PYTHONPATH=src python -m langgraph_agent_lab.cli run-scenarios --config configs/lab.yaml --output outputs/metrics2.json
 
 grade-local:
-	PYTHONPATH=src python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics.json
+	PYTHONPATH=src python -m langgraph_agent_lab.cli validate-metrics --metrics outputs/metrics2.json
 
 run-ui:
 	PYTHONPATH=src streamlit run src/langgraph_agent_lab/app.py

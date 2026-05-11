@@ -29,6 +29,12 @@ reports/lab_report.md
 checkpoints.db
 checkpoints.db-wal
 checkpoints.db-shm
+checkpoints_ui.db*
+
+# Temp & Agent files
+nodes_fixed.py
+plan.md
+.claude/
 
 # Testing
 .pytest_cache/

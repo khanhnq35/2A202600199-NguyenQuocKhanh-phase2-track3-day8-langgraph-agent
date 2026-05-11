@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from pathlib import Path
 from typing import Annotated
 
@@ -29,12 +30,18 @@ def run_scenarios(
     scenarios = load_scenarios(cfg["scenarios_path"])
     checkpointer = build_checkpointer(cfg.get("checkpointer", "memory"), cfg.get("database_url"))
     graph = build_graph(checkpointer=checkpointer)
+    run_id = uuid.uuid4().hex[:8]
     metrics = []
     for scenario in scenarios:
         state = initial_state(scenario)
+        state["thread_id"] = f"{state['thread_id']}-{run_id}"
         run_config = {"configurable": {"thread_id": state["thread_id"]}}
         final_state = graph.invoke(state, config=run_config)
-        metrics.append(metric_from_state(final_state, scenario.expected_route.value, scenario.requires_approval))
+        metrics.append(
+            metric_from_state(
+                final_state, scenario.expected_route.value, scenario.requires_approval
+            )
+        )
     report = summarize_metrics(metrics)
     write_metrics(report, output)
     if cfg.get("report_path"):

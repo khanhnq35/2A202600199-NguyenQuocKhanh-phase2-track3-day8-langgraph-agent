@@ -20,6 +20,7 @@ class ScenarioMetric(BaseModel):
     interrupt_count: int = 0
     approval_required: bool = False
     approval_observed: bool = False
+    pii_detected: bool = False
     latency_ms: int = 0
     errors: list[str] = Field(default_factory=list)
 
@@ -30,21 +31,31 @@ class MetricsReport(BaseModel):
     avg_nodes_visited: float
     total_retries: int
     total_interrupts: int
+    total_pii_detected: int = 0
     resume_success: bool = False
     scenario_metrics: list[ScenarioMetric]
 
 
-def metric_from_state(state: dict[str, Any], expected_route: str, approval_required: bool) -> ScenarioMetric:
+def metric_from_state(
+    state: dict[str, Any], expected_route: str, approval_required: bool
+) -> ScenarioMetric:
     events = state.get("events", []) or []
     errors = state.get("errors", []) or []
-    actual_route = state.get("route")
+    nodes = [e.get("node") for e in events if e.get("node")]
+    actual_route = state.get("route", "")
     approval = state.get("approval")
-    nodes = [event.get("node", "unknown") for event in events]
     retry_count = sum(1 for node in nodes if node == "retry")
     interrupt_count = sum(1 for node in nodes if node == "approval")
-    success = actual_route == expected_route and bool(state.get("final_answer") or state.get("pending_question"))
+    success = actual_route == expected_route and bool(
+        state.get("final_answer") or state.get("pending_question")
+    )
     if approval_required:
         success = success and approval is not None
+
+    # Extract PII detection from intake event metadata
+    intake_event: dict[str, Any] = next((e for e in events if e.get("node") == "intake"), {})
+    pii_detected = intake_event.get("metadata", {}).get("has_pii", False)
+
     return ScenarioMetric(
         scenario_id=str(state.get("scenario_id", "unknown")),
         success=success,
@@ -55,6 +66,7 @@ def metric_from_state(state: dict[str, Any], expected_route: str, approval_requi
         interrupt_count=interrupt_count,
         approval_required=approval_required,
         approval_observed=approval is not None,
+        pii_detected=pii_detected,
         errors=list(errors),
     )
 
@@ -68,6 +80,7 @@ def summarize_metrics(items: list[ScenarioMetric]) -> MetricsReport:
         avg_nodes_visited=mean(item.nodes_visited for item in items),
         total_retries=sum(item.retry_count for item in items),
         total_interrupts=sum(item.interrupt_count for item in items),
+        total_pii_detected=sum(1 for item in items if item.pii_detected),
         resume_success=False,
         scenario_metrics=items,
     )
